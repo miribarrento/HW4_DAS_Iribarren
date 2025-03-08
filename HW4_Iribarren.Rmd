@@ -1,0 +1,216 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+# \LARGE Homework Assignment 4
+
+# \Large Data Analysis & Statistics, Winter 2024/25  
+\large Lecturer: \Large Dario Paape
+
+# \large Group Members:  
+\large Daniel Lösel  
+\large Martín E. Iribarren
+
+
+\newpage
+
+# **1. Setup and Data Preparation**
+
+## **Loading Libraries**
+```{r}
+library(ggplot2)
+library(dplyr)
+library(lme4)
+library(readr)
+library(tidyr)
+library(tidyverse)
+library(here)
+
+```
+
+## **Loading Dataset**
+```{r}
+dataset <- read.csv(here("data", "data_wdi", "data.csv"))
+```
+
+## **Data Pre-processing**
+```{r}
+#Select Columns
+dataset <- dataset %>% 
+  select(-Country.Code, -Series.Code) 
+
+data_long <- dataset %>%
+  pivot_longer(
+    cols = starts_with("X"),
+    names_to = "Year",        
+    values_to = "Value"
+  ) %>%
+  mutate(Year = gsub("X|\\.YR", "", Year))
+```
+
+```{r}
+data_clean <- data_long %>%
+  filter(Series.Name %in% c("Gross fixed capital formation (% of GDP)",
+                            "General government final consumption expenditure (% of GDP)",
+                            "GDP (current US$)",
+                            "GDP growth (annual %)",
+                            "Inflation, GDP deflator (annual %)",
+                            "Control of Corruption: Estimate")) %>%
+  
+
+  pivot_wider(names_from = Series.Name, values_from = Value) %>%
+
+  mutate(Year = gsub("[^0-9]", "", Year), 
+         Year = as.numeric(Year)) %>%   
+
+  rename(
+    Total_Investment = "Gross fixed capital formation (% of GDP)",
+    Government_Expenditure = "General government final consumption expenditure (% of GDP)",
+    GDP = "GDP (current US$)",
+    GDP_Growth = "GDP growth (annual %)",
+    Inflation = "Inflation, GDP deflator (annual %)",
+    Control_of_Corruption = "Control of Corruption: Estimate" 
+  )
+```
+
+```{r}
+data_clean <- data_clean %>%
+  mutate(
+    Control_of_Corruption = ifelse(Control_of_Corruption == "..", 0.0, Control_of_Corruption),
+    across(c(Total_Investment, Government_Expenditure, GDP, Inflation, Control_of_Corruption), ~round(as.numeric(.), 2))
+  ) %>%
+  mutate(GDP_Growth = as.numeric(GDP_Growth)) %>% 
+  drop_na()
+```
+\newpage
+
+# **2. Exploratory Data Analysis**
+
+## **Inflation Distribution by Country**
+
+```{r}
+inflation_data <- data_clean %>%
+  filter(Country.Name %in% c("Germany", "Argentina", "Brazil", "Chile", "Italy")) %>% 
+  select(Country.Name, Year, Inflation) %>%
+  group_by(Country.Name, Year) %>%
+  summarise(Inflation = mean(Inflation, na.rm = TRUE)) %>%
+  ungroup()
+
+```
+
+```{r, fig.width = 10, fig.height=10}
+ggplot(inflation_data, aes(x = Year, y = Inflation)) +
+  geom_line(size = 1, color = "black") +  
+  facet_wrap(~ Country.Name, scales = "free_y", ncol = 2) +
+  labs(title = "Inflation Trend Over Time by Country", 
+       x = "Year", 
+       y = "Inflation (%)") +
+  theme(
+    legend.position = "none",
+    strip.text = element_text(size = 12, face = "bold"),  #
+  )
+
+```
+\newpage
+## **Government Expenditure by Country (% of GDP)**
+
+```{r}
+investment_data <- data_clean %>%
+  select(Country.Name, Year, Government_Expenditure) %>%
+  group_by(Country.Name) %>%
+  summarise(Average_Government_Expenditure = mean(Government_Expenditure, na.rm = TRUE)) %>%
+  mutate(Average_Government_Expenditure = round(Average_Government_Expenditure, 2)) %>%  
+  arrange(desc(Average_Government_Expenditure)) %>%  
+  ungroup()
+
+
+investment_data
+
+
+```
+
+```{r}
+corruption_data <- data_clean %>%
+  select(Country.Name, Year, Control_of_Corruption) %>%
+  group_by(Country.Name) %>%
+  summarise(Average_Control_of_Corruption = mean(Control_of_Corruption, na.rm = TRUE)) %>%
+  mutate(Average_Control_of_Corruption = round(Average_Control_of_Corruption, 2)) %>%  
+  arrange(desc(Average_Control_of_Corruption)) %>%  
+  ungroup()
+
+corruption_data
+
+```
+\newpage
+
+## **3. Hypothesis Testing**
+
+### **Hypothesis 1: Effect of Control of Corruption on Inflation**
+
+```{r}
+model_h1 <- lmer(Inflation ~ Control_of_Corruption + (1 | Country.Name), 
+                                   data = data_clean)
+summary(model_h1)
+```
+
+```{r}
+ggplot(data_clean, aes(x = Control_of_Corruption, y = Inflation)) +
+  geom_point(alpha = 0.5, color = "gray") +
+  geom_smooth(method = "lm", aes(group = 1), color = "red", size = 1, se = TRUE) +
+  labs(title = "Effect of Control of Corruption on Inflation",
+       x = "Control of Corruption (Estimate)",
+       y = "Inflation") +
+  theme_minimal() 
+```
+
+### **Interpretation Hypothesis 1:**
+
+The model indicates an average inflation of 7.7%, when the control of corruption is zero. The coefficient for Control_of_Corruption is -3.167 with a t-value of -3.068, meaning that for each unit increase in the control of corruption, inflation decreases by approximately 3.167%. 
+
+This negative relationship is statistically significant, supporting the hypothesis that better control of corruption is associated with lower inflation. However, as we will observe in the next models, the random effects show high variability across countries, with a variance of 41.54 and a standard deviation of 6.445.
+
+
+### **Hypothesis 2: The effect of Government expenditure on GDP growth**
+
+```{r}
+model_h2 <- lmer(GDP_Growth ~ Government_Expenditure + (1 + Government_Expenditure || Country.Name), data = data_clean)
+summary(model_h2)
+
+```
+### **Interpretation Hypothesis 2:**
+
+The model indicates a significant negative relationship between government expenditure and GDP growth, with a coefficient of -0.70876 (t-value = -8.414). This suggests that higher government expenditure is associated with lower GDP growth. In terms of fixed effects, when there is zero government expenditure, the model predicts a baseline GDP growth of 14%. Additionally, the residuals appear reasonable, and indicate that the model fit might not be perfect for all countries, suggesting that some country-specific factors could influence the relationship between government expenditure and GDP growth.
+
+### **Hypothesis 3:  Effect of Total Investment on GDP**
+
+```{r}
+model_h3 <- lmer(GDP_Growth ~ Total_Investment + (1 | Country.Name), 
+                 data = data_clean)
+summary(model_h3)
+
+```
+
+
+```{r}
+gdp_investment <- data_clean %>%
+  group_by(Country.Name, Year) %>%
+  summarise(Total_Investment = mean(Total_Investment),
+            GDP_Growth = mean(GDP_Growth))
+```
+
+```{r}
+ggplot(gdp_investment, aes(x = Total_Investment, y = GDP_Growth)) +
+  geom_point(alpha = 0.5, color = "gray") +
+  geom_smooth(method = "lm", aes(group = 1), color = "purple", size = 1, se = TRUE) +
+  labs(title = "Effect of Total Investment on GDP Growth per Year",
+       x = "Total Investment (% of GDP)",
+       y = "GDP Growth") +
+  theme_minimal()
+
+```
+### **Interpretation Hypothesis 3:**
+The model shows a positive correlation between total investment and GDP growth (coefficient of 0.23245, t = 6.058). 
+The variability in the random effects suggests that some countries exhibit atypical behavior compared to the rest. This can be understood in light of the high negative correlation between the intercept and Total_Investment (-0.958), which could indicate differences in the initial growth levels between countries with varying investment levels.
+
+
